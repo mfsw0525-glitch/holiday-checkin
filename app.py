@@ -24,6 +24,7 @@ def check_password():
     
     if password_input:
         correct_password = None
+        # 智能查找密码位置
         if "feishu" in st.secrets and "APP_PASSWORD" in st.secrets["feishu"]:
             correct_password = st.secrets["feishu"]["APP_PASSWORD"]
         elif "APP_PASSWORD" in st.secrets:
@@ -164,9 +165,23 @@ def background_sync(token, record_id, new_status, title, coins, send_msg):
 
 st.markdown("""
 <style>
+    /* 全局背景 */
     .stApp {background-color: #FFF0F5;}
-    #MainMenu, footer, header {visibility: hidden;}
     
+    /* 🔥🔥🔥 隐藏官方 UI 元素 🔥🔥🔥 */
+    /* 隐藏右上角菜单 */
+    #MainMenu {visibility: hidden;}
+    /* 隐藏底部 "Hosted with Streamlit" */
+    footer {visibility: hidden;}
+    /* 隐藏顶部红条 (如果有) */
+    header {visibility: hidden;}
+    /* 隐藏右下角 "Manage app" 按钮 */
+    .stDeployButton {display: none;}
+    [data-testid="stToolbar"] {visibility: hidden !important;}
+    [data-testid="stDecoration"] {visibility: hidden !important;}
+    [data-testid="stStatusWidget"] {visibility: hidden !important;}
+
+    /* 卡片和按钮样式 */
     .task-card {background-color: white; border-radius: 12px; padding: 15px; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); transition: transform 0.2s;}
     .task-card:hover {transform: scale(1.01);}
     
@@ -185,22 +200,11 @@ st.markdown("""
     .total-coins-num {font-size: 48px; font-weight: 900; text-shadow: 2px 2px 4px rgba(0,0,0,0.2);}
     .total-coins-label {font-size: 16px; font-weight: bold;}
 
-    /* 按钮样式定制 */
-    /* Secondary (开始/刷新) -> 黄色 */
+    /* 按钮样式 */
     div.stButton > button[kind="secondary"] {background-color: #FFD700; color: #333; border: none; font-weight: 900;}
     div.stButton > button[kind="secondary"]:hover {background-color: #FFC107; color: black;}
-    
-    /* Primary (完成/已完) -> 绿色 */
     div.stButton > button[kind="primary"] {background-color: #4CAF50; color: white; border: none; font-weight: 900;}
-    
-    /* 修复：已完(disabled) 按钮的样式 */
-    /* 让 disabled 的 primary 按钮保持绿色背景，但稍微变透明 */
-    div.stButton > button[kind="primary"]:disabled {
-        background-color: #4CAF50; 
-        color: white; 
-        opacity: 0.6;
-    }
-
+    div.stButton > button[kind="primary"]:disabled {background-color: #4CAF50; color: white; opacity: 0.6;}
     .stButton>button {border-radius: 50px; height: 45px; box-shadow: 0 3px 6px rgba(0,0,0,0.1);}
 </style>
 """, unsafe_allow_html=True)
@@ -249,7 +253,8 @@ with col_right:
                 st.session_state.total_coins_history += coins
                 st.balloons()
             threading.Thread(target=background_sync, args=(st.session_state.token, rid, new, title, coins, new=="已完成")).start()
-            st.rerun()
+            # 🔥 这里的 st.rerun() 已经被移除，解决了黄色报错问题
+            # Streamlit 会在回调结束后自动刷新，所以无需手动调用
 
     for i, t in enumerate(tasks):
         s = t['status']
@@ -262,12 +267,8 @@ with col_right:
             with c_btn:
                 st.write(""); st.write("")
                 if s == "待开始": 
-                    # 🟡 待开始 = 黄色 (Secondary)
                     st.button("🚀 开始", key=t['id'], on_click=on_click, args=(i,t['id'],s,t['title'],t['coins']), type="secondary", use_container_width=True)
                 elif s == "进行中": 
-                    # 🟢 进行中 = 绿色 (Primary)
                     st.button("🏁 完成", key=t['id'], on_click=on_click, args=(i,t['id'],s,t['title'],t['coins']), type="primary", use_container_width=True)
                 elif s == "已完成": 
-                    # 🟢 已完成 = 绿色 (Primary) + Disabled
-                    # ⚠️ 关键修改：这里加了 type="primary"
                     st.button("✅ 已完", key=t['id'], disabled=True, use_container_width=True, type="primary")
