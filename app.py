@@ -31,30 +31,31 @@ def check_password():
         return True
     
     st.markdown("""
-    <style>
-        [data-testid="stForm"] .stFormSubmitButton {
-            display: flex; justify-content: center; margin-top: 30px;
-        }
-        [data-testid="stForm"] .stFormSubmitButton button {
-            width: 80% !important; height: 60px !important;
-            font-size: 24px !important; font-weight: 900 !important;
-            border-radius: 35px !important; background-color: #4CAF50 !important;
-            color: white !important; border: none !important;
-            box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4) !important;
-            transition: all 0.3s ease !important;
-        }
-        [data-testid="stForm"] .stFormSubmitButton button:hover {
-            background-color: #45a049 !important; transform: scale(1.03) !important;
-        }
-        header, footer {visibility: hidden !important; display: none !important; height: 0px !important;}
-        .stApp > footer {display: none !important; opacity: 0 !important;}
-        #MainMenu {visibility: hidden !important; display: none !important;}
-        div[class*="viewerBadge"] {display: none !important;}
-        [data-testid="stStatusWidget"] {visibility: hidden !important; display: none !important;}
-        [data-testid="stToolbar"] {visibility: hidden !important; display: none !important;}
-        [data-testid="stDecoration"] {visibility: hidden !important; display: none !important;}
-    </style>
-    """, unsafe_allow_html=True)
+<style>
+    [data-testid="stForm"] .stFormSubmitButton {
+        display: flex; justify-content: center; margin-top: 30px;
+    }
+    [data-testid="stForm"] .stFormSubmitButton button {
+        width: 80% !important; height: 60px !important;
+        font-size: 24px !important; font-weight: 900 !important;
+        border-radius: 35px !important; background-color: #4CAF50 !important;
+        color: white !important; border: none !important;
+        box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4) !important;
+        transition: all 0.3s ease !important;
+    }
+    [data-testid="stForm"] .stFormSubmitButton button:hover {
+        background-color: #45a049 !important; transform: scale(1.03) !important;
+    }
+    /* 隐藏多余UI */
+    header, footer {visibility: hidden !important; display: none !important; height: 0px !important;}
+    .stApp > footer {display: none !important; opacity: 0 !important;}
+    #MainMenu {visibility: hidden !important; display: none !important;}
+    div[class*="viewerBadge"] {display: none !important;}
+    [data-testid="stStatusWidget"] {visibility: hidden !important; display: none !important;}
+    [data-testid="stToolbar"] {visibility: hidden !important; display: none !important;}
+    [data-testid="stDecoration"] {visibility: hidden !important; display: none !important;}
+</style>
+""", unsafe_allow_html=True)
 
     st.markdown("## 🔒 请输入家庭暗号")
     st.markdown("---")
@@ -116,40 +117,25 @@ def get_tenant_access_token():
         return r.json().get("tenant_access_token")
     except: return None
 
-# 🔥🔥 核心升级：超级时间解析器 🔥🔥
-# 能够识别：19:00, 19点, 19点1分, 8点半
 def parse_single_time_str(s):
-    # 统一格式：把中文符号变成英文或去掉
     s = s.replace("：", ":").replace("点", ":").replace("分", "")
     parts = re.findall(r"\d+", s)
-    
     if not parts: return 0
-    
     h = int(parts[0])
     m = 0
-    
-    # 如果有第二部分数字 (比如 19:1)
-    if len(parts) >= 2:
-        m = int(parts[1])
-    # 如果没有数字但有"半" (比如 8点半 -> 8:)
-    elif "半" in s:
-        m = 30
-        
+    if len(parts) >= 2: m = int(parts[1])
+    elif "半" in s: m = 30
     return h * 60 + m
 
 def parse_duration_minutes(time_str):
     try:
-        # 按横杠分割开始和结束
         parts = str(time_str).split('-')
-        if len(parts) != 2: return 60 # 格式不对默认1小时
-        
+        if len(parts) != 2: return 60
         start_min = parse_single_time_str(parts[0])
         end_min = parse_single_time_str(parts[1])
-        
         duration = end_min - start_min
         return duration if duration > 0 else 60
-    except:
-        return 60
+    except: return 60
 
 def fetch_total_coins(token):
     if not token: return 0
@@ -237,6 +223,57 @@ def sync_to_feishu_direct(token, record_id, new_status, title, coins, send_msg, 
     except:
         pass
 
+# 🔥🔥🔥 修复版：使用占位符 (placeholder) 实现自动消失 🔥🔥🔥
+def show_big_popup(msg, is_bad=False):
+    color = "#FF9800" if is_bad else "#4CAF50" # 橙色坏消息，绿色好消息
+    icon = "📉" if is_bad else "🎉"
+    
+    # 1. 创建一个空盒子
+    popup_box = st.empty()
+    
+    # 2. 把弹窗画在盒子里
+    popup_box.markdown(f"""
+<style>
+    .popup-overlay {{
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.5);
+        z-index: 99999;
+        display: flex; justify-content: center; align-items: center;
+    }}
+    .popup-box {{
+        background: {color};
+        padding: 40px;
+        border-radius: 20px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        text-align: center;
+        width: 80%;
+        max-width: 600px;
+        animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }}
+    .popup-icon {{ font-size: 80px; display: block; margin-bottom: 20px; }}
+    .popup-text {{ color: white; font-size: 28px; font-weight: bold; line-height: 1.5; white-space: pre-wrap; }}
+    
+    @keyframes popIn {{
+        0% {{ transform: scale(0.5); opacity: 0; }}
+        100% {{ transform: scale(1); opacity: 1; }}
+    }}
+</style>
+
+<div class="popup-overlay">
+    <div class="popup-box">
+        <div class="popup-icon">{icon}</div>
+        <div class="popup-text">{msg}</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+    
+    # 3. 停留3秒
+    time.sleep(3)
+    
+    # 4. 🔥 关键一步：把盒子清空！弹窗就会消失了
+    popup_box.empty()
+
 # ================= 界面构建 =================
 
 st.markdown("""
@@ -315,6 +352,8 @@ with col_right:
                 actual_minutes = 0
                 limit_minutes = parse_duration_minutes(time_str)
                 
+                msg = ""
+                
                 if start_ts_val and start_ts_val > 0:
                     start_dt = datetime.datetime.fromtimestamp(start_ts_val / 1000)
                     end_dt = datetime.datetime.now()
@@ -325,15 +364,19 @@ with col_right:
                     if actual_minutes > limit_minutes:
                         is_timeout = True
                         final_coins = coins // 2
-                        st.toast(f"📉 超时减半！用时 {actual_minutes}分 > 限时 {limit_minutes}分", icon="⚠️")
+                        msg = f"📉 哎呀超时了！\n实际用时 {actual_minutes}分钟 > 限时 {limit_minutes}分钟\n获得金币减半 ({final_coins})"
                     else:
-                        st.toast(f"✅ 挑战成功！用时 {actual_minutes}分", icon="🎉")
+                        msg = f"恭喜你在规定时间内完成！\n实际用时 {actual_minutes}分钟 (限时 {limit_minutes}分钟)\n获得 {final_coins} 金币"
                 else:
-                    st.toast("⚠️ 未找到开始时间，按全额发放", icon="ℹ️")
+                    msg = f"恭喜完成任务！\n(无时间记录，按全额发放)\n获得 {final_coins} 金币"
 
                 st.session_state.tasks_data[idx]['coins'] = final_coins
                 st.session_state.total_coins_history += final_coins
+                
                 st.balloons()
+                
+                # 🔥 这里调用新的弹窗逻辑
+                show_big_popup(msg, is_bad=is_timeout)
                 
                 threading.Thread(target=sync_to_feishu_direct, args=(st.session_state.token, rid, new, title, final_coins, True, actual_minutes, limit_minutes, is_timeout, None)).start()
 
