@@ -4,6 +4,7 @@ import datetime
 import time
 import re
 import threading
+import extra_streamlit_components as stx  # 引入 Cookie 管理库
 
 # 1. 页面配置
 st.set_page_config(
@@ -13,35 +14,51 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ================= 🔐 门卫系统 =================
+# ================= 🔐 智能门卫系统 (Cookie 版) =================
 
 def check_password():
-    if st.session_state.get("password_correct", False):
+    # 1. 获取 Cookie 管理器
+    cookie_manager = stx.CookieManager()
+    
+    # 2. 检查 Cookie 里有没有存过密码
+    # 注意：get_all() 有时会有延迟，所以我们用 session_state 做双重缓存
+    if "is_logged_in" not in st.session_state:
+        st.session_state.is_logged_in = False
+
+    auth_cookie = cookie_manager.get(cookie="family_auth")
+    
+    # 如果 Cookie 对，直接放行
+    if auth_cookie == "true":
+        st.session_state.is_logged_in = True
         return True
     
+    # 如果 Session 对，也放行
+    if st.session_state.is_logged_in:
+        return True
+
+    # 3. 如果都没登录，显示输入框
     st.markdown("## 🔒 请输入家庭暗号")
     password_input = st.text_input("密码", type="password")
     
     if password_input:
         correct_password = None
-        # 智能查找密码位置
         if "feishu" in st.secrets and "APP_PASSWORD" in st.secrets["feishu"]:
             correct_password = st.secrets["feishu"]["APP_PASSWORD"]
         elif "APP_PASSWORD" in st.secrets:
             correct_password = st.secrets["APP_PASSWORD"]
             
-        if correct_password is None:
-            st.error("⚠️ 配置错误：在 Secrets 中找不到 APP_PASSWORD。")
-            return False
-
         if str(password_input) == str(correct_password):
-            st.session_state["password_correct"] = True
+            # 密码对！设置 Cookie，有效期 30 天
+            cookie_manager.set("family_auth", "true", key="set_auth", expires_at=datetime.datetime.now() + datetime.timedelta(days=30))
+            st.session_state.is_logged_in = True
             st.rerun()
         else:
             st.error("❌ 暗号不对哦")
             
     return False
 
+# 🛑 必须等待 Cookie 加载完成，否则会闪烁
+# 这里做一个简单的等待逻辑
 if not check_password():
     st.stop()
 
@@ -82,6 +99,27 @@ def get_tenant_access_token():
         r = requests.post(url, headers={"Content-Type": "application/json"}, json={"app_id": APP_ID, "app_secret": APP_SECRET})
         return r.json().get("tenant_access_token")
     except: return None
+
+# 解析任务时长 (例如 "13点-14点" -> 60分钟)
+def parse_duration_minutes(time_str):
+    try:
+        # 提取所有数字
+        nums = re.findall(r"\d+", str(time_str))
+        if len(nums) < 2: return 60 # 默认1小时
+        
+        start_hour = int(nums[0])
+        start_min = 30 if "半" in str(time_str).split('-')[0] else 0
+        
+        end_hour = int(nums[1])
+        end_min = 30 if "半" in str(time_str).split('-')[1] else 0
+        
+        start_total = start_hour * 60 + start_min
+        end_total = end_hour * 60 + end_min
+        
+        duration = end_total - start_total
+        return duration if duration > 0 else 60
+    except:
+        return 60 # 解析失败默认给60分钟
 
 def fetch_total_coins(token):
     if not token: return 0
@@ -132,9 +170,12 @@ def fetch_todays_tasks(token):
                 try: coins_val = int(fields.get("金币值", 0))
                 except: coins_val = 0
                 clean_tasks.append({
-                    "id": record_id, "time": fields.get("时间段", "全天"),
-                    "title": task_title, "tag": fields.get("标签", "其他"),
-                    "coins": coins_val, "status": task_status
+                    "id": record_id, 
+                    "time": fields.get("时间段", "全天"),
+                    "title": task_title, 
+                    "tag": fields.get("标签", "其他"),
+                    "coins": coins_val, 
+                    "status": task_status
                 })
 
         def parse_time(t):
@@ -149,15 +190,25 @@ def fetch_todays_tasks(token):
         return clean_tasks
     except: return []
 
-def background_sync(token, record_id, new_status, title, coins, send_msg):
+def background_sync(token, record_id, new_status, title, coins, send_msg, actual_minutes=0, limit_minutes=0, is_timeout=False):
     try:
+        # 更新状态和金币（如果是超时，更新修改后的金币值）
         url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{APP_TOKEN}/tables/{TABLE_ID}/records/{record_id}"
-        requests.put(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json={"fields": {"状态": new_status}})
+        payload = {"fields": {"状态": new_status}}
+        if is_timeout:
+            payload["fields"]["金币值"] = coins # 更新飞书里的金币数为减半后的值
+            
+        requests.put(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
     except: pass
+    
     if send_msg and WEBHOOK_URL and "hook" in WEBHOOK_URL:
         try:
+            msg = f"🎉 打卡播报：宝贝完成了【{title}】！\n💰 获得金币：{coins}"
+            if is_timeout:
+                msg += f"\n⚠️ 注意：用时 {actual_minutes}分钟 (限时{limit_minutes}分钟)，超时扣除一半金币。"
+            
             requests.post(WEBHOOK_URL, headers={"Content-Type": "application/json"}, json={
-                "msg_type": "text", "content": {"text": f"🎉 打卡播报：宝贝完成了【{title}】！\n💰 金币：{coins}"}
+                "msg_type": "text", "content": {"text": msg}
             })
         except: pass
 
@@ -168,19 +219,18 @@ st.markdown("""
     /* 全局背景 */
     .stApp {background-color: #FFF0F5;}
     
-    /* 🔥🔥🔥 隐藏官方 UI 元素 🔥🔥🔥 */
-    /* 隐藏右上角菜单 */
-    #MainMenu {visibility: hidden;}
-    /* 隐藏底部 "Hosted with Streamlit" */
-    footer {visibility: hidden;}
-    /* 隐藏顶部红条 (如果有) */
-    header {visibility: hidden;}
-    /* 隐藏右下角 "Manage app" 按钮 */
-    .stDeployButton {display: none;}
-    [data-testid="stToolbar"] {visibility: hidden !important;}
-    [data-testid="stDecoration"] {visibility: hidden !important;}
-    [data-testid="stStatusWidget"] {visibility: hidden !important;}
-
+    /* 🔥🔥🔥 强力隐藏官方 UI (使用更高级的选择器) 🔥🔥🔥 */
+    header {visibility: hidden !important;}
+    footer {visibility: hidden !important;}
+    #MainMenu {visibility: hidden !important;}
+    .stDeployButton {display: none !important;}
+    div[data-testid="stToolbar"] {visibility: hidden !important; display: none !important;}
+    div[data-testid="stDecoration"] {visibility: hidden !important; display: none !important;}
+    div[data-testid="stStatusWidget"] {visibility: hidden !important; display: none !important;}
+    
+    /* 隐藏头像 */
+    div[data-testid="stHeader"] {visibility: hidden !important; display: none !important;}
+    
     /* 卡片和按钮样式 */
     .task-card {background-color: white; border-radius: 12px; padding: 15px; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); transition: transform 0.2s;}
     .task-card:hover {transform: scale(1.01);}
@@ -212,6 +262,8 @@ st.markdown("""
 if 'token' not in st.session_state: st.session_state.token = get_tenant_access_token()
 if 'tasks_data' not in st.session_state: st.session_state.tasks_data = fetch_todays_tasks(st.session_state.token)
 if 'total_coins_history' not in st.session_state: st.session_state.total_coins_history = fetch_total_coins(st.session_state.token)
+# 记录任务开始时间 (内存临时存储，网页刷新会丢，如果需要持久化需存飞书，这里简化处理)
+if 'start_times' not in st.session_state: st.session_state.start_times = {}
 
 tasks = st.session_state.tasks_data
 total_history = st.session_state.total_coins_history
@@ -245,30 +297,69 @@ with col_right:
     
     if not tasks: st.info("👋 今天没有任务哦，快去飞书安排吧！")
 
-    def on_click(idx, rid, status, title, coins):
+    def on_click(idx, rid, status, title, coins, time_str):
         new = "进行中" if status == "待开始" else ("已完成" if status == "进行中" else "")
         if new:
-            st.session_state.tasks_data[idx]['status'] = new
-            if new == "已完成":
-                st.session_state.total_coins_history += coins
+            # 1. 记录开始时间
+            if new == "进行中":
+                st.session_state.start_times[rid] = datetime.datetime.now()
+                st.toast(f"🚀 开始计时：{title}")
+                st.session_state.tasks_data[idx]['status'] = new
+            
+            # 2. 结算逻辑
+            elif new == "已完成":
+                start_time = st.session_state.start_times.get(rid)
+                
+                # 计算耗时和金币
+                final_coins = coins
+                is_timeout = False
+                actual_minutes = 0
+                limit_minutes = parse_duration_minutes(time_str)
+                
+                if start_time:
+                    end_time = datetime.datetime.now()
+                    duration = end_time - start_time
+                    actual_minutes = int(duration.total_seconds() / 60)
+                    
+                    # 调试用：如果小于1分钟按1分钟算
+                    if actual_minutes < 1: actual_minutes = 1 
+                    
+                    # 🔥 超时判断逻辑
+                    if actual_minutes > limit_minutes:
+                        is_timeout = True
+                        final_coins = coins // 2 # 金币减半
+                        st.error(f"⚠️ 任务超时！用时{actual_minutes}分钟 (限时{limit_minutes}分钟)，金币减半 📉")
+                    else:
+                        st.success(f"✅ 挑战成功！用时{actual_minutes}分钟")
+                else:
+                    # 如果没有点击开始直接点击完成，不扣金币（防止误操作）
+                    pass
+
+                st.session_state.tasks_data[idx]['status'] = new
+                st.session_state.tasks_data[idx]['coins'] = final_coins # 更新界面显示的金币
+                st.session_state.total_coins_history += final_coins
                 st.balloons()
-            threading.Thread(target=background_sync, args=(st.session_state.token, rid, new, title, coins, new=="已完成")).start()
-            # 🔥 这里的 st.rerun() 已经被移除，解决了黄色报错问题
-            # Streamlit 会在回调结束后自动刷新，所以无需手动调用
+                
+                # 启动后台同步 (传入超时信息)
+                threading.Thread(target=background_sync, args=(st.session_state.token, rid, new, title, final_coins, True, actual_minutes, limit_minutes, is_timeout)).start()
 
     for i, t in enumerate(tasks):
         s = t['status']
         color = "#4CAF50" if s == '已完成' else ("#FFC107" if s == '进行中' else "#E0E0E0")
         bg = "#E8F5E9" if s == '已完成' else ("#FFFDE7" if s == '进行中' else "white")
+        
+        # 显示动态金币（如果超时被扣了，显示扣后的）
+        display_coins = t['coins']
+        
         with st.container():
             c_card, c_btn = st.columns([3, 1])
             with c_card:
-                st.markdown(f"""<div class="task-card" style="border-left:6px solid {color}; background:{bg};"><div style="display:flex; justify-content:space-between; align-items:center;"><div><span style="font-size:12px; color:#666; background:rgba(255,255,255,0.8); padding:2px 8px; border-radius:10px;">⏰ {t['time']}</span><span style="font-size:12px; color:#555; margin-left:5px; font-weight:bold;">{t['tag']}</span><h4 style="margin:8px 0 0 0; color:#333; font-size:18px;">{t['title']}</h4></div><div style="text-align:right;"><div style="background:{color}; color:white; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:bold;">+{t['coins']} 💰</div></div></div></div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class="task-card" style="border-left:6px solid {color}; background:{bg};"><div style="display:flex; justify-content:space-between; align-items:center;"><div><span style="font-size:12px; color:#666; background:rgba(255,255,255,0.8); padding:2px 8px; border-radius:10px;">⏰ {t['time']}</span><span style="font-size:12px; color:#555; margin-left:5px; font-weight:bold;">{t['tag']}</span><h4 style="margin:8px 0 0 0; color:#333; font-size:18px;">{t['title']}</h4></div><div style="text-align:right;"><div style="background:{color}; color:white; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:bold;">+{display_coins} 💰</div></div></div></div>""", unsafe_allow_html=True)
             with c_btn:
                 st.write(""); st.write("")
                 if s == "待开始": 
-                    st.button("🚀 开始", key=t['id'], on_click=on_click, args=(i,t['id'],s,t['title'],t['coins']), type="secondary", use_container_width=True)
+                    st.button("🚀 开始", key=t['id'], on_click=on_click, args=(i,t['id'],s,t['title'],t['coins'], t['time']), type="secondary", use_container_width=True)
                 elif s == "进行中": 
-                    st.button("🏁 完成", key=t['id'], on_click=on_click, args=(i,t['id'],s,t['title'],t['coins']), type="primary", use_container_width=True)
+                    st.button("🏁 完成", key=t['id'], on_click=on_click, args=(i,t['id'],s,t['title'],t['coins'], t['time']), type="primary", use_container_width=True)
                 elif s == "已完成": 
                     st.button("✅ 已完", key=t['id'], disabled=True, use_container_width=True, type="primary")
