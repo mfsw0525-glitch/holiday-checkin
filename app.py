@@ -3,7 +3,7 @@ import requests
 import datetime
 import time
 import re
-import threading
+import threading # 重新召回多线程
 
 # 1. 页面配置
 st.set_page_config(
@@ -13,14 +13,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ================= 🔐 门卫系统 (URL魔法链接+美化按钮版) =================
+# ================= 🔐 门卫系统 =================
 
 def check_password():
-    """
-    使用 URL 参数进行验证，并美化了登录按钮。
-    """
-    
-    # 1. 获取正确的密码
     correct_password = None
     try:
         if "feishu" in st.secrets and "APP_PASSWORD" in st.secrets["feishu"]:
@@ -31,57 +26,38 @@ def check_password():
         st.error("⚠️ 未配置 APP_PASSWORD")
         return False
 
-    # 2. 检查 URL 上有没有挂着正确的密码
     params = st.query_params
     if params.get("code") == correct_password:
         return True
     
-    # 3. 如果未登录，显示美化后的登录界面
-    
-    # 🔥🔥🔥 核心修改：注入专门用于美化登录按钮的 CSS 🔥🔥🔥
     st.markdown("""
     <style>
-        /* 1. 定位表单提交按钮的容器，使其居中 */
         [data-testid="stForm"] .stFormSubmitButton {
-            display: flex;
-            justify-content: center;
-            margin-top: 30px; /* 距离上方输入框远一点 */
+            display: flex; justify-content: center; margin-top: 30px;
         }
-        
-        /* 2. 美化按钮本体 */
         [data-testid="stForm"] .stFormSubmitButton button {
-            width: 80% !important;   /* 宽度占屏幕80% */
-            height: 60px !important; /* 高度变高 */
-            font-size: 24px !important; /* 字体变大 */
-            font-weight: 900 !important; /* 字体加粗 */
-            border-radius: 35px !important; /* 更圆润的角 */
-            background-color: #4CAF50 !important; /* 醒目的绿色 */
-            color: white !important; /* 白色文字 */
-            border: none !important;
-            box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4) !important; /* 加上绿色阴影，更有立体感 */
-            transition: all 0.3s ease !important; /* 添加动画过渡 */
+            width: 80% !important; height: 60px !important;
+            font-size: 24px !important; font-weight: 900 !important;
+            border-radius: 35px !important; background-color: #4CAF50 !important;
+            color: white !important; border: none !important;
+            box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4) !important;
+            transition: all 0.3s ease !important;
         }
-        
-        /* 3. 鼠标悬停效果 */
         [data-testid="stForm"] .stFormSubmitButton button:hover {
-            background-color: #45a049 !important; /* 悬停变深绿 */
-            transform: scale(1.03) !important; /* 稍微放大一点点 */
+            background-color: #45a049 !important; transform: scale(1.03) !important;
         }
     </style>
     """, unsafe_allow_html=True)
-    # 🔥🔥🔥 CSS 注入结束 🔥🔥🔥
 
     st.markdown("## 🔒 请输入家庭暗号")
-    st.markdown("---") # 加条分割线更好看
+    st.markdown("---")
     
     with st.form("login_form"):
         password_input = st.text_input("密码", type="password")
-        # 这个按钮会被上面的 CSS 美化
         submit = st.form_submit_button("🛡️ 点击登录") 
         
     if submit:
         if str(password_input) == correct_password:
-            # 登录成功，把密码写到 URL 里
             st.query_params["code"] = correct_password
             st.success("✅ 登录成功！")
             time.sleep(0.5)
@@ -92,11 +68,10 @@ def check_password():
             
     return False
 
-# 🛑 门卫拦截
 if not check_password():
     st.stop()
 
-# ================= 🚀 核心功能区 =================
+# ================= 🚀 核心配置区 =================
 
 try:
     def get_secret(key):
@@ -210,36 +185,34 @@ def fetch_todays_tasks(token):
         return clean_tasks
     except: return []
 
-def background_sync(token, record_id, new_status, title, coins, send_msg, actual_minutes=0, limit_minutes=0, is_timeout=False):
+# 🔥 恢复后台线程上传，保证极速体验
+def sync_to_feishu_background(token, record_id, new_status, title, coins, send_msg, actual_minutes=0, limit_minutes=0, is_timeout=False):
     try:
         url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{APP_TOKEN}/tables/{TABLE_ID}/records/{record_id}"
         payload = {"fields": {"状态": new_status}}
         if is_timeout: payload["fields"]["金币值"] = coins
+        
         requests.put(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
-    except: pass
-    if send_msg and WEBHOOK_URL and "hook" in WEBHOOK_URL:
-        try:
+        
+        if send_msg and WEBHOOK_URL and "hook" in WEBHOOK_URL:
             msg = f"🎉 打卡播报：宝贝完成了【{title}】！\n💰 获得金币：{coins}"
             if is_timeout: msg += f"\n⚠️ 注意：用时 {actual_minutes}分钟 (限时{limit_minutes}分钟)，超时扣除一半金币。"
             requests.post(WEBHOOK_URL, headers={"Content-Type": "application/json"}, json={"msg_type": "text", "content": {"text": msg}})
-        except: pass
+    except:
+        pass
 
 # ================= 界面构建 =================
 
 st.markdown("""
 <style>
     .stApp {background-color: #FFF0F5;}
-    
-    /* 🔥 隐藏官方 UI 🔥 */
-    header {visibility: hidden !important; display: none !important;}
-    footer {visibility: hidden !important; display: none !important;}
+    header, footer {visibility: hidden !important; display: none !important; height: 0px !important;}
     #MainMenu {visibility: hidden !important; display: none !important;}
-    .stDeployButton {display: none !important;}
-    .viewerBadge_container__1QSob {display: none !important;}
-    [data-testid="stStatusWidget"] {display: none !important;}
-    [data-testid="stToolbar"] {display: none !important;}
-    [data-testid="stDecoration"] {display: none !important;}
-    .stApp > footer {display: none !important;}
+    .stApp > footer {display: none !important; opacity: 0 !important;}
+    div[class*="viewerBadge"] {display: none !important;}
+    [data-testid="stToolbar"] {visibility: hidden !important; display: none !important;}
+    [data-testid="stDecoration"] {visibility: hidden !important; display: none !important;}
+    [data-testid="stStatusWidget"] {visibility: hidden !important; display: none !important;}
     
     .task-card {background-color: white; border-radius: 12px; padding: 15px; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); transition: transform 0.2s;}
     .task-card:hover {transform: scale(1.01);}
@@ -260,8 +233,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if 'token' not in st.session_state: st.session_state.token = get_tenant_access_token()
-if 'tasks_data' not in st.session_state: st.session_state.tasks_data = fetch_todays_tasks(st.session_state.token)
-if 'total_coins_history' not in st.session_state: st.session_state.total_coins_history = fetch_total_coins(st.session_state.token)
+
+# 🔥 核心修改：只在第一次加载时读取飞书数据，之后操作只改本地，防止覆盖
+if 'tasks_data' not in st.session_state: 
+    st.session_state.tasks_data = fetch_todays_tasks(st.session_state.token)
+    
+if 'total_coins_history' not in st.session_state: 
+    st.session_state.total_coins_history = fetch_total_coins(st.session_state.token)
+    
 if 'start_times' not in st.session_state: st.session_state.start_times = {}
 
 tasks = st.session_state.tasks_data
@@ -288,6 +267,7 @@ with col_right:
     c_head, c_refresh = st.columns([5, 1])
     with c_head: st.markdown("## 📝 任务清单")
     with c_refresh: 
+        # 🔥 手动刷新按钮：强制重新拉取飞书最新数据
         if st.button("🔄"): 
             st.session_state.tasks_data = fetch_todays_tasks(st.session_state.token)
             st.session_state.total_coins_history = fetch_total_coins(st.session_state.token)
@@ -298,16 +278,22 @@ with col_right:
     def on_click(idx, rid, status, title, coins, time_str):
         new = "进行中" if status == "待开始" else ("已完成" if status == "进行中" else "")
         if new:
+            # 1. 直接更新本地内存数据 (Local Optimistic Update)
+            # 这行代码保证界面瞬间变化，不需要等待飞书
+            st.session_state.tasks_data[idx]['status'] = new
+            
             if new == "进行中":
                 st.session_state.start_times[rid] = datetime.datetime.now()
-                st.toast(f"🚀 开始计时：{title}")
-                st.session_state.tasks_data[idx]['status'] = new
+                # 2. 启动后台线程悄悄同步
+                threading.Thread(target=sync_to_feishu_background, args=(st.session_state.token, rid, new, title, coins, False)).start()
+                
             elif new == "已完成":
                 start_time = st.session_state.start_times.get(rid)
                 final_coins = coins
                 is_timeout = False
                 actual_minutes = 0
                 limit_minutes = parse_duration_minutes(time_str)
+                
                 if start_time:
                     end_time = datetime.datetime.now()
                     duration = end_time - start_time
@@ -316,14 +302,16 @@ with col_right:
                     if actual_minutes > limit_minutes:
                         is_timeout = True
                         final_coins = coins // 2
-                        st.error(f"⚠️ 任务超时！用时{actual_minutes}分钟 (限时{limit_minutes}分钟)，金币减半 📉")
+                        st.error(f"⚠️ 任务超时！用时{actual_minutes}分钟 (限时{limit_minutes}分钟)")
                     else:
                         st.success(f"✅ 挑战成功！用时{actual_minutes}分钟")
-                st.session_state.tasks_data[idx]['status'] = new
+                
                 st.session_state.tasks_data[idx]['coins'] = final_coins
                 st.session_state.total_coins_history += final_coins
                 st.balloons()
-                threading.Thread(target=background_sync, args=(st.session_state.token, rid, new, title, final_coins, True, actual_minutes, limit_minutes, is_timeout)).start()
+                
+                # 2. 启动后台线程悄悄同步
+                threading.Thread(target=sync_to_feishu_background, args=(st.session_state.token, rid, new, title, final_coins, True, actual_minutes, limit_minutes, is_timeout)).start()
 
     for i, t in enumerate(tasks):
         s = t['status']
