@@ -3,7 +3,7 @@ import requests
 import datetime
 import time
 import re
-import threading # 重新召回多线程
+import threading
 
 # 1. 页面配置
 st.set_page_config(
@@ -46,6 +46,13 @@ def check_password():
         [data-testid="stForm"] .stFormSubmitButton button:hover {
             background-color: #45a049 !important; transform: scale(1.03) !important;
         }
+        header, footer {visibility: hidden !important; display: none !important; height: 0px !important;}
+        .stApp > footer {display: none !important; opacity: 0 !important;}
+        #MainMenu {visibility: hidden !important; display: none !important;}
+        div[class*="viewerBadge"] {display: none !important;}
+        [data-testid="stStatusWidget"] {visibility: hidden !important; display: none !important;}
+        [data-testid="stToolbar"] {visibility: hidden !important; display: none !important;}
+        [data-testid="stDecoration"] {visibility: hidden !important; display: none !important;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -109,19 +116,40 @@ def get_tenant_access_token():
         return r.json().get("tenant_access_token")
     except: return None
 
+# 🔥🔥 核心升级：超级时间解析器 🔥🔥
+# 能够识别：19:00, 19点, 19点1分, 8点半
+def parse_single_time_str(s):
+    # 统一格式：把中文符号变成英文或去掉
+    s = s.replace("：", ":").replace("点", ":").replace("分", "")
+    parts = re.findall(r"\d+", s)
+    
+    if not parts: return 0
+    
+    h = int(parts[0])
+    m = 0
+    
+    # 如果有第二部分数字 (比如 19:1)
+    if len(parts) >= 2:
+        m = int(parts[1])
+    # 如果没有数字但有"半" (比如 8点半 -> 8:)
+    elif "半" in s:
+        m = 30
+        
+    return h * 60 + m
+
 def parse_duration_minutes(time_str):
     try:
-        nums = re.findall(r"\d+", str(time_str))
-        if len(nums) < 2: return 60
-        start_hour = int(nums[0])
-        start_min = 30 if "半" in str(time_str).split('-')[0] else 0
-        end_hour = int(nums[1])
-        end_min = 30 if "半" in str(time_str).split('-')[1] else 0
-        start_total = start_hour * 60 + start_min
-        end_total = end_hour * 60 + end_min
-        duration = end_total - start_total
+        # 按横杠分割开始和结束
+        parts = str(time_str).split('-')
+        if len(parts) != 2: return 60 # 格式不对默认1小时
+        
+        start_min = parse_single_time_str(parts[0])
+        end_min = parse_single_time_str(parts[1])
+        
+        duration = end_min - start_min
         return duration if duration > 0 else 60
-    except: return 60
+    except:
+        return 60
 
 def fetch_total_coins(token):
     if not token: return 0
@@ -158,6 +186,8 @@ def fetch_todays_tasks(token):
             task_title = fields.get("任务名称", "未知")
             task_status = fields.get("状态", "待开始")
             task_date_val = fields.get("日期", 0)
+            start_ts = fields.get("实际开始时间", 0) 
+            
             is_match = False
             if isinstance(task_date_val, int):
                 utc_dt = datetime.datetime.utcfromtimestamp(task_date_val / 1000)
@@ -169,9 +199,13 @@ def fetch_todays_tasks(token):
                 try: coins_val = int(fields.get("金币值", 0))
                 except: coins_val = 0
                 clean_tasks.append({
-                    "id": record_id, "time": fields.get("时间段", "全天"),
-                    "title": task_title, "tag": fields.get("标签", "其他"),
-                    "coins": coins_val, "status": task_status
+                    "id": record_id, 
+                    "time": fields.get("时间段", "全天"),
+                    "title": task_title, 
+                    "tag": fields.get("标签", "其他"),
+                    "coins": coins_val, 
+                    "status": task_status,
+                    "start_ts": start_ts
                 })
         def parse_time(t):
             try:
@@ -185,12 +219,14 @@ def fetch_todays_tasks(token):
         return clean_tasks
     except: return []
 
-# 🔥 恢复后台线程上传，保证极速体验
-def sync_to_feishu_background(token, record_id, new_status, title, coins, send_msg, actual_minutes=0, limit_minutes=0, is_timeout=False):
+def sync_to_feishu_direct(token, record_id, new_status, title, coins, send_msg, actual_minutes=0, limit_minutes=0, is_timeout=False, start_ts=None):
     try:
         url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{APP_TOKEN}/tables/{TABLE_ID}/records/{record_id}"
         payload = {"fields": {"状态": new_status}}
-        if is_timeout: payload["fields"]["金币值"] = coins
+        if new_status == "进行中" and start_ts:
+             payload["fields"]["实际开始时间"] = start_ts
+        if is_timeout: 
+            payload["fields"]["金币值"] = coins
         
         requests.put(url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
         
@@ -206,14 +242,6 @@ def sync_to_feishu_background(token, record_id, new_status, title, coins, send_m
 st.markdown("""
 <style>
     .stApp {background-color: #FFF0F5;}
-    header, footer {visibility: hidden !important; display: none !important; height: 0px !important;}
-    #MainMenu {visibility: hidden !important; display: none !important;}
-    .stApp > footer {display: none !important; opacity: 0 !important;}
-    div[class*="viewerBadge"] {display: none !important;}
-    [data-testid="stToolbar"] {visibility: hidden !important; display: none !important;}
-    [data-testid="stDecoration"] {visibility: hidden !important; display: none !important;}
-    [data-testid="stStatusWidget"] {visibility: hidden !important; display: none !important;}
-    
     .task-card {background-color: white; border-radius: 12px; padding: 15px; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); transition: transform 0.2s;}
     .task-card:hover {transform: scale(1.01);}
     .stat-box {border-radius: 15px; padding: 10px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.08); margin-bottom: 12px; width: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center;}
@@ -234,14 +262,10 @@ st.markdown("""
 
 if 'token' not in st.session_state: st.session_state.token = get_tenant_access_token()
 
-# 🔥 核心修改：只在第一次加载时读取飞书数据，之后操作只改本地，防止覆盖
 if 'tasks_data' not in st.session_state: 
     st.session_state.tasks_data = fetch_todays_tasks(st.session_state.token)
-    
 if 'total_coins_history' not in st.session_state: 
     st.session_state.total_coins_history = fetch_total_coins(st.session_state.token)
-    
-if 'start_times' not in st.session_state: st.session_state.start_times = {}
 
 tasks = st.session_state.tasks_data
 total_history = st.session_state.total_coins_history
@@ -267,7 +291,6 @@ with col_right:
     c_head, c_refresh = st.columns([5, 1])
     with c_head: st.markdown("## 📝 任务清单")
     with c_refresh: 
-        # 🔥 手动刷新按钮：强制重新拉取飞书最新数据
         if st.button("🔄"): 
             st.session_state.tasks_data = fetch_todays_tasks(st.session_state.token)
             st.session_state.total_coins_history = fetch_total_coins(st.session_state.token)
@@ -275,55 +298,58 @@ with col_right:
     
     if not tasks: st.info("👋 今天没有任务哦，快去飞书安排吧！")
 
-    def on_click(idx, rid, status, title, coins, time_str):
+    def on_click(idx, rid, status, title, coins, time_str, saved_start_ts):
         new = "进行中" if status == "待开始" else ("已完成" if status == "进行中" else "")
         if new:
-            # 1. 直接更新本地内存数据 (Local Optimistic Update)
-            # 这行代码保证界面瞬间变化，不需要等待飞书
             st.session_state.tasks_data[idx]['status'] = new
             
             if new == "进行中":
-                st.session_state.start_times[rid] = datetime.datetime.now()
-                # 2. 启动后台线程悄悄同步
-                threading.Thread(target=sync_to_feishu_background, args=(st.session_state.token, rid, new, title, coins, False)).start()
+                current_ts = int(time.time() * 1000)
+                st.session_state.tasks_data[idx]['start_ts'] = current_ts
+                threading.Thread(target=sync_to_feishu_direct, args=(st.session_state.token, rid, new, title, coins, False, 0, 0, False, current_ts)).start()
                 
             elif new == "已完成":
-                start_time = st.session_state.start_times.get(rid)
+                start_ts_val = st.session_state.tasks_data[idx].get('start_ts') or saved_start_ts
                 final_coins = coins
                 is_timeout = False
                 actual_minutes = 0
                 limit_minutes = parse_duration_minutes(time_str)
                 
-                if start_time:
-                    end_time = datetime.datetime.now()
-                    duration = end_time - start_time
+                if start_ts_val and start_ts_val > 0:
+                    start_dt = datetime.datetime.fromtimestamp(start_ts_val / 1000)
+                    end_dt = datetime.datetime.now()
+                    duration = end_dt - start_dt
                     actual_minutes = int(duration.total_seconds() / 60)
                     if actual_minutes < 1: actual_minutes = 1
+                    
                     if actual_minutes > limit_minutes:
                         is_timeout = True
                         final_coins = coins // 2
-                        st.error(f"⚠️ 任务超时！用时{actual_minutes}分钟 (限时{limit_minutes}分钟)")
+                        st.toast(f"📉 超时减半！用时 {actual_minutes}分 > 限时 {limit_minutes}分", icon="⚠️")
                     else:
-                        st.success(f"✅ 挑战成功！用时{actual_minutes}分钟")
-                
+                        st.toast(f"✅ 挑战成功！用时 {actual_minutes}分", icon="🎉")
+                else:
+                    st.toast("⚠️ 未找到开始时间，按全额发放", icon="ℹ️")
+
                 st.session_state.tasks_data[idx]['coins'] = final_coins
                 st.session_state.total_coins_history += final_coins
                 st.balloons()
                 
-                # 2. 启动后台线程悄悄同步
-                threading.Thread(target=sync_to_feishu_background, args=(st.session_state.token, rid, new, title, final_coins, True, actual_minutes, limit_minutes, is_timeout)).start()
+                threading.Thread(target=sync_to_feishu_direct, args=(st.session_state.token, rid, new, title, final_coins, True, actual_minutes, limit_minutes, is_timeout, None)).start()
 
     for i, t in enumerate(tasks):
         s = t['status']
         color = "#4CAF50" if s == '已完成' else ("#FFC107" if s == '进行中' else "#E0E0E0")
         bg = "#E8F5E9" if s == '已完成' else ("#FFFDE7" if s == '进行中' else "white")
         display_coins = t['coins']
+        t_start_ts = t.get('start_ts', 0)
+        
         with st.container():
             c_card, c_btn = st.columns([3, 1])
             with c_card:
                 st.markdown(f"""<div class="task-card" style="border-left:6px solid {color}; background:{bg};"><div style="display:flex; justify-content:space-between; align-items:center;"><div><span style="font-size:12px; color:#666; background:rgba(255,255,255,0.8); padding:2px 8px; border-radius:10px;">⏰ {t['time']}</span><span style="font-size:12px; color:#555; margin-left:5px; font-weight:bold;">{t['tag']}</span><h4 style="margin:8px 0 0 0; color:#333; font-size:18px;">{t['title']}</h4></div><div style="text-align:right;"><div style="background:{color}; color:white; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:bold;">+{display_coins} 💰</div></div></div></div>""", unsafe_allow_html=True)
             with c_btn:
                 st.write(""); st.write("")
-                if s == "待开始": st.button("🚀 开始", key=t['id'], on_click=on_click, args=(i,t['id'],s,t['title'],t['coins'], t['time']), type="secondary", use_container_width=True)
-                elif s == "进行中": st.button("🏁 完成", key=t['id'], on_click=on_click, args=(i,t['id'],s,t['title'],t['coins'], t['time']), type="primary", use_container_width=True)
+                if s == "待开始": st.button("🚀 开始", key=t['id'], on_click=on_click, args=(i,t['id'],s,t['title'],t['coins'], t['time'], t_start_ts), type="secondary", use_container_width=True)
+                elif s == "进行中": st.button("🏁 完成", key=t['id'], on_click=on_click, args=(i,t['id'],s,t['title'],t['coins'], t['time'], t_start_ts), type="primary", use_container_width=True)
                 elif s == "已完成": st.button("✅ 已完", key=t['id'], disabled=True, use_container_width=True, type="primary")
