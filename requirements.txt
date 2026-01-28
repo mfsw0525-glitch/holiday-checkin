@@ -1,3 +1,2 @@
 streamlit
 requests
-extra-streamlit-components
